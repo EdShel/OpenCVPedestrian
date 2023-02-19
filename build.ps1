@@ -7,4 +7,5 @@ g++ main.cpp `
     -llibopencv_imgproc470 `
     -llibopencv_videoio470 `
     -llibopencv_objdetect470 `
+    -llibopencv_ml470 `
     -o .\bin\main.exe
