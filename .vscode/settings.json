@@ -60,6 +60,9 @@
         "streambuf": "cpp",
         "thread": "cpp",
         "typeinfo": "cpp",
-        "fstream": "cpp"
+        "fstream": "cpp",
+        "unordered_set": "cpp",
+        "future": "cpp",
+        "typeindex": "cpp"
     }
 }
