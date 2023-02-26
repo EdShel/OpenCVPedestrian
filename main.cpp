@@ -5,6 +5,7 @@
 #include <opencv2/ml.hpp>
 #include <iostream>
 #include <fstream>
+#include <set>
 
 #define PATCH_W 80
 #define PATCH_H 200
@@ -21,6 +22,9 @@ int detectPedestrians(cv::Ptr<cv::ml::SVM> &svm, cv::HOGDescriptor &hog, std::st
 void groupSlices(std::vector<cv::Rect> &rectangles, std::vector<cv::Rect> &overlaps);
 std::string fileNameWithoutExtension(std::string path);
 std::vector<int> getImagesSorted(std::string imagesDirectory);
+int evalMain(std::string correct, std::string detected);
+int readAnnotations(std::string annotationsFile, std::map<int, std::vector<cv::Rect>> &result);
+void getKeys(std::map<int, std::vector<cv::Rect>> map, std::set<int> &result);
 
 int main(int argc, char *argv[])
 {
@@ -38,6 +42,10 @@ int main(int argc, char *argv[])
     if (commandType == "test")
     {
         return testMain();
+    }
+    if (commandType == "eval")
+    {
+        return evalMain("../test-public/test-processed.idl", "test-processed.idl");
     }
 
     std::cout << "Unknown command type." << std::endl;
@@ -79,7 +87,7 @@ int trainMain()
             break;
         }
 
-        bool isValidationSample = imageNo % 5 == 0;
+        bool isValidationSample = imageNo % 100 == 0;
         if (isValidationSample)
         {
             continue;
@@ -88,8 +96,6 @@ int trainMain()
         {
             continue;
         }
-
-        std::cout << imageNo << std::endl;
 
         cv::Rect pedestrianBox(x1, y1, x2 - x1, y2 - y1);
         std::string trainImageFile = "../train/" + std::to_string(imageNo) + ".png";
@@ -181,20 +187,6 @@ cv::Mat stdVectorToSamplesCvMat(std::vector<cv::Mat> &vec)
 
     return testDataMatrix;
 }
-
-// std::vector<float> getSvmDetector(const cv::Ptr<cv::ml::SVM> &svm)
-// {
-//     cv::Mat sv = svm->getSupportVectors();
-//     const int sv_total = sv.rows;
-//     cv::Mat alpha, svidx;
-//     double rho = svm->getDecisionFunction(0, alpha, svidx);
-//     std::vector<float> hog_detector(sv.cols + 1);
-//     memcpy(&hog_detector[0], sv.ptr(), sv.cols * sizeof(hog_detector[0]));
-//     hog_detector[sv.cols] = (float)-rho;
-//     return hog_detector;
-// }
-
-//
 
 int testMain()
 {
@@ -347,35 +339,118 @@ void groupSlices(std::vector<cv::Rect> &rectangles, std::vector<cv::Rect> &overl
     }
 }
 
-void evalMain()
+int evalMain(std::string correct, std::string detected)
 {
-    // trainAnnotationsFile.open("../train/train-processed.idl");
-    // if (!trainAnnotationsFile.is_open())
-    // {
-    //     std::cout << "Can't open training annotations file." << std::endl;
-    //     return 1;
-    // }
+    int truePositives = 0;  // Detected pedestrians who overlap at least 50% with the correct pedestrians
+    int falsePositives = 0; // Detected pedestrians who overlap less than 50% with the correct pedestrians
+    int correctCount = 0;
 
-    // while (true)
-    // {
-    //     int imageNo, y1, x1, y2, x2;
-    //     trainAnnotationsFile >> imageNo;
-    //     trainAnnotationsFile >> y1;
-    //     trainAnnotationsFile >> x1;
-    //     trainAnnotationsFile >> y2;
-    //     trainAnnotationsFile >> x2;
+    std::map<int, std::vector<cv::Rect>> correctMap, detectedMap;
+    if (readAnnotations(correct, correctMap) != 0)
+    {
+        return 1;
+    }
+    if (readAnnotations(detected, detectedMap) != 0)
+    {
+        return 1;
+    }
 
-    //     if (trainAnnotationsFile.eof())
-    //     {
-    //         break;
-    //     }
+    std::set<int> images;
+    getKeys(correctMap, images);
+    getKeys(detectedMap, images);
 
-    //     bool isValidationSample = imageNo % 5 == 0;
-    //     if (isValidationSample)
-    //     {
-    //         continue;
-    //     }
-    // }
+    for (auto b = images.begin(), e = images.end(); b != e; b++)
+    {
+        int imageId = *b;
 
-    // trainAnnotationsFile.close();
+        if (correctMap.count(imageId) == 0)
+        {
+            falsePositives += detectedMap[imageId].size();
+            continue;
+        }
+        correctCount += correctMap[imageId].size();
+
+        if (detectedMap.count(imageId) == 0)
+        {
+            continue;
+        }
+
+        std::vector<cv::Rect> correctPedestrians = correctMap[imageId];
+        std::vector<cv::Rect> detectedPedestrians = detectedMap[imageId];
+
+        for (auto db = detectedPedestrians.begin(), de = detectedPedestrians.end(); db != de; db++)
+        {
+            cv::Rect detectedBox = *db;
+            bool isCorrectMatch = false;
+            for (auto cb = correctPedestrians.begin(), ce = correctPedestrians.end(); cb != ce; cb++)
+            {
+                cv::Rect correctBox = *cb;
+                int correctBoxAreaSize = correctBox.area();
+                int overlapAreaSize = (correctBox & detectedBox).area();
+
+                if (overlapAreaSize >= correctBoxAreaSize / 2)
+                {
+                    isCorrectMatch = true;
+                    break;
+                }
+            }
+
+            if (isCorrectMatch)
+            {
+                truePositives++;
+            }
+            else
+            {
+                falsePositives++;
+            }
+        }
+    }
+
+    double recall = ((double)truePositives) / correctCount;
+    double precision = ((double)truePositives) / (truePositives + falsePositives);
+
+    std::cout << "Recall   : " << recall << std::endl;
+    std::cout << "Precision: " << precision << std::endl;
+
+    return 0;
+}
+
+int readAnnotations(std::string annotationsFile, std::map<int, std::vector<cv::Rect>> &result)
+{
+    std::ifstream file;
+    file.open(annotationsFile);
+    if (!file.is_open())
+    {
+        std::cout << "Can't open annotations file " << annotationsFile << std::endl;
+        return 1;
+    }
+
+    while (true)
+    {
+        int imageNo, y1, x1, y2, x2;
+        file >> imageNo;
+        file >> y1;
+        file >> x1;
+        file >> y2;
+        file >> x2;
+
+        if (file.eof())
+        {
+            break;
+        }
+
+        cv::Rect box(x1, y1, x2 - x1, y2 - y1);
+        result[imageNo].push_back(box);
+    }
+
+    file.close();
+    return 0;
+}
+
+void getKeys(std::map<int, std::vector<cv::Rect>> map, std::set<int> &result)
+{
+    for (auto b = map.begin(), e = map.end(); b != e; b++)
+    {
+        result.insert((*b).first);
+    }
 }

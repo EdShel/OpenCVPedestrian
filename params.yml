@@ -16,4 +16,4 @@ gammaCorrection: 1
 nlevels: 64
 signedGradient: 1
 
-backgroundSamples: 2
+backgroundSamples: 1
