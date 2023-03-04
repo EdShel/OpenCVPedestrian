@@ -15,7 +15,6 @@
 
 void createHog(cv::FileStorage &params, cv::HOGDescriptor &hog);
 cv::Mat stdVectorToSamplesCvMat(std::vector<cv::Mat> &vec);
-
 int trainMain();
 int testMain();
 int detectPedestrians(cv::Ptr<cv::ml::SVM> &svm, cv::HOGDescriptor &hog, std::string imageFile, std::vector<cv::Rect> &pedestriansResult);
@@ -25,6 +24,8 @@ std::vector<int> getImagesSorted(std::string imagesDirectory);
 int evalMain(std::string correct, std::string detected);
 int readAnnotations(std::string annotationsFile, std::map<int, std::vector<cv::Rect>> &result);
 void getKeys(std::map<int, std::vector<cv::Rect>> map, std::set<int> &result);
+
+bool showDetectionImages = true;
 
 int main(int argc, char *argv[])
 {
@@ -85,16 +86,6 @@ int trainMain()
         if (trainAnnotationsFile.eof())
         {
             break;
-        }
-
-        bool isValidationSample = imageNo % 100 == 0;
-        if (isValidationSample)
-        {
-            continue;
-        }
-        if (imageNo < 200)
-        {
-            continue;
         }
 
         cv::Rect pedestrianBox(x1, y1, x2 - x1, y2 - y1);
@@ -190,7 +181,6 @@ cv::Mat stdVectorToSamplesCvMat(std::vector<cv::Mat> &vec)
 
 int testMain()
 {
-    bool showDetections = true;
     std::string imagesDirectory = "../test-public";
     std::vector<int> imagesNumbers = getImagesSorted(imagesDirectory);
 
@@ -290,7 +280,8 @@ int detectPedestrians(cv::Ptr<cv::ml::SVM> &svm, cv::HOGDescriptor &hog, std::st
 
     for (int strideX = 0; strideX < results.rows; strideX++)
     {
-        if (results.at<float>(1, strideX) == LABEL_BACKGROUND)
+        // For some reason the last row might be garbage SOMETIMES, hmmmm
+        if (results.at<float>(1, strideX) != LABEL_PEDESTRIAN)
         {
             continue;
         }
@@ -298,8 +289,6 @@ int detectPedestrians(cv::Ptr<cv::ml::SVM> &svm, cv::HOGDescriptor &hog, std::st
         int x = strideX * stride;
         cv::Rect box(x, 0, PATCH_W, PATCH_H);
         pedestrianBoxes.push_back(box);
-
-        cv::rectangle(testImage, box, cv::Scalar(0, 0, 255));
     }
 
     groupSlices(pedestrianBoxes, pedestriansResult);
@@ -309,8 +298,14 @@ int detectPedestrians(cv::Ptr<cv::ml::SVM> &svm, cv::HOGDescriptor &hog, std::st
         cv::rectangle(testImage, *b, cv::Scalar(255, 0, 0));
     }
 
-    cv::imshow("Test image", testImage);
-    cv::waitKey();
+    if (showDetectionImages)
+    {
+        cv::imshow("Test image", testImage);
+        if (cv::waitKey(3000) == -1)
+        {
+            showDetectionImages = false;
+        }
+    }
 
     return 0;
 }
@@ -326,7 +321,7 @@ void groupSlices(std::vector<cv::Rect> &rectangles, std::vector<cv::Rect> &overl
             cv::Rect overlap = currentRect & (*ob);
             if (overlap.area() > 0)
             {
-                *ob = currentRect & (*ob);
+                *ob = (*ob) | currentRect;
                 merged = true;
                 break;
             }
@@ -336,6 +331,12 @@ void groupSlices(std::vector<cv::Rect> &rectangles, std::vector<cv::Rect> &overl
         {
             overlaps.push_back(currentRect);
         }
+    }
+
+    for (auto ob = overlaps.begin(), oe = overlaps.end(); ob != oe; ob++)
+    {
+        ob->x -= (PATCH_W - ob->width) / 2;
+        ob->width = PATCH_W;
     }
 }
 
