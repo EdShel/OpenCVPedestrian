@@ -25,13 +25,24 @@ int testMain(
     std::string paramsFile,
     std::string classifierCoefficientsFile,
     std::string outputAnnotationsFile);
-int detectPedestrians(cv::Ptr<cv::ml::SVM> &svm, cv::HOGDescriptor &hog, std::string imageFile, std::vector<cv::Rect> &pedestriansResult);
+int detectPedestrians(
+    cv::Ptr<cv::ml::SVM> &svm,
+    cv::HOGDescriptor &hog,
+    cv::Mat image,
+    std::vector<cv::Rect> &pedestriansResult,
+    bool showDetections);
 void groupSlices(std::vector<cv::Rect> &rectangles, std::vector<cv::Rect> &overlaps);
 std::string fileNameWithoutExtension(std::string path);
 std::vector<int> getImagesSorted(std::string imagesDirectory);
-int evalMain(std::string correct, std::string detected);
+int evalMain(
+    std::string correct,
+    std::string detected);
 int readAnnotations(std::string annotationsFile, std::map<int, std::vector<cv::Rect>> &result);
 void getKeys(std::map<int, std::vector<cv::Rect>> map, std::set<int> &result);
+int detectMain(
+    std::string paramsFile,
+    std::string classifierCoefficientsFile,
+    std::string imageFile);
 
 bool showDetectionImages = true;
 
@@ -45,14 +56,9 @@ int main(int argc, char *argv[])
         "{ttd           |../test-public/                    | Test images directory         }"
         "{p             |../params.yml                      | Classifier parameters         }"
         "{c             |pedestrian_model.yml               | Classifier coefficients       }"
-        "{cfa           |test-processed.idl                 | Classified annotations file   }";
+        "{cfa           |test-processed.idl                 | Classified annotations file   }"
+        "{image i       |<none>                             | Image to detect pedestrian    }";
     cv::CommandLineParser cli(argc, argv, cliKeys);
-
-    if (argc < 2)
-    {
-        std::cout << "Not enough arguments." << std::endl;
-        return 1;
-    }
 
     std::string commandType = cli.get<std::string>("@commandType");
     if (commandType == "train")
@@ -76,6 +82,13 @@ int main(int argc, char *argv[])
         return evalMain(
             cli.get<std::string>("tta"),
             cli.get<std::string>("cfa"));
+    }
+    if (commandType == "detect")
+    {
+        return detectMain(
+            cli.get<std::string>("p"),
+            cli.get<std::string>("c"),
+            cli.get<std::string>("image"));
     }
 
     std::cout << "Unknown command type." << std::endl;
@@ -234,15 +247,31 @@ int testMain(
     for (auto b = imagesNumbers.begin(), e = imagesNumbers.end(); b != e; b++)
     {
         int imageNumber = *b;
-        std::string image = imagesDirectory + std::to_string(*b) + ".png";
+        std::string imageFile = imagesDirectory + std::to_string(*b) + ".png";
 
-        int detectResultCode = detectPedestrians(svm, hog, image, results);
+        cv::Mat image = cv::imread(imageFile);
+        if (image.empty())
+        {
+            std::cout << "Cannot read image '" << imageFile << "'" << std::endl;
+            return 1;
+        }
+
+        int detectResultCode = detectPedestrians(svm, hog, image, results, showDetectionImages);
         if (detectResultCode != 0)
         {
             std::cout << "Error during detection" << std::endl;
 
             output.close();
             return detectResultCode;
+        }
+
+        if (showDetectionImages)
+        {
+            if (cv::waitKey(3000) == -1)
+            {
+                showDetectionImages = false;
+                cv::destroyAllWindows();
+            }
         }
 
         for (auto rb = results.begin(), re = results.end(); rb != re; rb++)
@@ -288,23 +317,22 @@ std::string fileNameWithoutExtension(std::string path)
     return path.substr(slash + 1, dot - slash - 1);
 }
 
-int detectPedestrians(cv::Ptr<cv::ml::SVM> &svm, cv::HOGDescriptor &hog, std::string imageFile, std::vector<cv::Rect> &pedestriansResult)
+int detectPedestrians(
+    cv::Ptr<cv::ml::SVM> &svm,
+    cv::HOGDescriptor &hog,
+    cv::Mat image,
+    std::vector<cv::Rect> &pedestriansResult,
+    bool showDetections)
 {
-    cv::Mat testImage = cv::imread(imageFile);
-    if (testImage.empty())
-    {
-        std::cout << "Cannot read image " << imageFile << std::endl;
-        return 1;
-    }
 
     std::vector<float> descriptors;
     std::vector<cv::Mat> testDataList;
 
     int stride = 4;
-    for (int x = 0; x + PATCH_W < testImage.cols; x += stride)
+    for (int x = 0; x + PATCH_W < image.cols; x += stride)
     {
         cv::Rect slice(x, 0, PATCH_W, PATCH_H);
-        hog.compute(testImage(slice), descriptors);
+        hog.compute(image(slice), descriptors);
         testDataList.push_back(cv::Mat(descriptors).clone());
     }
 
@@ -329,18 +357,14 @@ int detectPedestrians(cv::Ptr<cv::ml::SVM> &svm, cv::HOGDescriptor &hog, std::st
 
     groupSlices(pedestrianBoxes, pedestriansResult);
 
-    for (auto b = pedestriansResult.begin(), e = pedestriansResult.end(); b != e; b++)
+    if (showDetections)
     {
-        cv::rectangle(testImage, *b, cv::Scalar(255, 0, 0));
-    }
-
-    if (showDetectionImages)
-    {
-        cv::imshow("Test image", testImage);
-        if (cv::waitKey(3000) == -1)
+        for (auto b = pedestriansResult.begin(), e = pedestriansResult.end(); b != e; b++)
         {
-            showDetectionImages = false;
+            cv::rectangle(image, *b, cv::Scalar(0, 255, 0));
         }
+
+        cv::imshow("Detected image", image);
     }
 
     return 0;
@@ -355,7 +379,7 @@ void groupSlices(std::vector<cv::Rect> &rectangles, std::vector<cv::Rect> &overl
         for (auto ob = overlaps.begin(), oe = overlaps.end(); ob != oe; ob++)
         {
             cv::Rect overlap = currentRect & (*ob);
-            if (overlap.area() > 0)
+            if (overlap.area() > PATCH_W * PATCH_H / 4)
             {
                 *ob = (*ob) | currentRect;
                 merged = true;
@@ -490,4 +514,41 @@ void getKeys(std::map<int, std::vector<cv::Rect>> map, std::set<int> &result)
     {
         result.insert((*b).first);
     }
+}
+
+int detectMain(
+    std::string paramsFile,
+    std::string classifierCoefficientsFile,
+    std::string imageFile)
+{
+    auto svm = cv::ml::SVM::load(classifierCoefficientsFile);
+
+    cv::FileStorage params(paramsFile, cv::FileStorage::READ);
+    cv::HOGDescriptor hog;
+    createHog(params, hog);
+
+    cv::Mat image = cv::imread(imageFile);
+    if (image.empty())
+    {
+        std::cout << "Cannot read image '" << imageFile << "'" << std::endl;
+        return 1;
+    }
+
+    int imageHeight = image.rows;
+    if (imageHeight != PATCH_H)
+    {
+        double scaleFactor = ((double)PATCH_H) / imageHeight;
+        cv::resize(image, image, cv::Size(std::round(image.cols * scaleFactor), PATCH_H));
+    }
+
+    std::vector<cv::Rect> result;
+    if (detectPedestrians(svm, hog, image, result, true) != 0)
+    {
+        std::cout << "Error during detection" << std::endl;
+        return 1;
+    }
+    std::cout << "Detected " << result.size() << " pedestrians" << std::endl;
+    cv::waitKey();
+
+    return 0;
 }
