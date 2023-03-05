@@ -15,8 +15,16 @@
 
 void createHog(cv::FileStorage &params, cv::HOGDescriptor &hog);
 cv::Mat stdVectorToSamplesCvMat(std::vector<cv::Mat> &vec);
-int trainMain();
-int testMain();
+int trainMain(
+    std::string annotationsFile,
+    std::string trainImagesFolder,
+    std::string paramsFile,
+    std::string outputFile);
+int testMain(
+    std::string imagesDirectory,
+    std::string paramsFile,
+    std::string classifierCoefficientsFile,
+    std::string outputAnnotationsFile);
 int detectPedestrians(cv::Ptr<cv::ml::SVM> &svm, cv::HOGDescriptor &hog, std::string imageFile, std::vector<cv::Rect> &pedestriansResult);
 void groupSlices(std::vector<cv::Rect> &rectangles, std::vector<cv::Rect> &overlaps);
 std::string fileNameWithoutExtension(std::string path);
@@ -29,41 +37,67 @@ bool showDetectionImages = true;
 
 int main(int argc, char *argv[])
 {
+    cv::String cliKeys =
+        "{@commandType  |<none>                             | Command type                  }"
+        "{tra           |../train/train-processed.idl       | Train annotations file        }"
+        "{trd           |../train/                          | Train images directory        }"
+        "{tta           |../test-public/test-processed.idl  | Test annotations file         }"
+        "{ttd           |../test-public/                    | Test images directory         }"
+        "{p             |../params.yml                      | Classifier parameters         }"
+        "{c             |pedestrian_model.yml               | Classifier coefficients       }"
+        "{cfa           |test-processed.idl                 | Classified annotations file   }";
+    cv::CommandLineParser cli(argc, argv, cliKeys);
+
     if (argc < 2)
     {
         std::cout << "Not enough arguments." << std::endl;
         return 1;
     }
 
-    std::string commandType = argv[1];
+    std::string commandType = cli.get<std::string>("@commandType");
     if (commandType == "train")
     {
-        return trainMain();
+        return trainMain(
+            cli.get<std::string>("tra"),
+            cli.get<std::string>("trd"),
+            cli.get<std::string>("p"),
+            cli.get<std::string>("c"));
     }
     if (commandType == "test")
     {
-        return testMain();
+        return testMain(
+            cli.get<std::string>("ttd"),
+            cli.get<std::string>("p"),
+            cli.get<std::string>("c"),
+            cli.get<std::string>("cfa"));
     }
     if (commandType == "eval")
     {
-        return evalMain("../test-public/test-processed.idl", "test-processed.idl");
+        return evalMain(
+            cli.get<std::string>("tta"),
+            cli.get<std::string>("cfa"));
     }
 
     std::cout << "Unknown command type." << std::endl;
+    cli.printMessage();
     return 1;
 }
 
-int trainMain()
+int trainMain(
+    std::string annotationsFile,
+    std::string trainImagesFolder,
+    std::string paramsFile,
+    std::string outputFile)
 {
     std::ifstream trainAnnotationsFile;
-    trainAnnotationsFile.open("../train/train-processed.idl");
+    trainAnnotationsFile.open(annotationsFile);
     if (!trainAnnotationsFile.is_open())
     {
         std::cout << "Can't open training annotations file." << std::endl;
         return 1;
     }
 
-    cv::FileStorage params("../params.yml", cv::FileStorage::READ);
+    cv::FileStorage params(paramsFile, cv::FileStorage::READ);
     int backgroundSamples = params["backgroundSamples"];
 
     cv::HOGDescriptor hog;
@@ -89,7 +123,7 @@ int trainMain()
         }
 
         cv::Rect pedestrianBox(x1, y1, x2 - x1, y2 - y1);
-        std::string trainImageFile = "../train/" + std::to_string(imageNo) + ".png";
+        std::string trainImageFile = trainImagesFolder + std::to_string(imageNo) + ".png";
         cv::Mat trainImage = cv::imread(trainImageFile, cv::ImreadModes::IMREAD_GRAYSCALE);
         if (trainImage.empty())
         {
@@ -135,7 +169,7 @@ int trainMain()
     svm->setKernel(cv::ml::SVM::LINEAR);
     svm->trainAuto(trainDataMatrix, cv::ml::ROW_SAMPLE, labelsList);
 
-    svm->save("pedestrian_model.yml");
+    svm->save(outputFile);
 
     return 0;
 }
@@ -179,26 +213,28 @@ cv::Mat stdVectorToSamplesCvMat(std::vector<cv::Mat> &vec)
     return testDataMatrix;
 }
 
-int testMain()
+int testMain(
+    std::string imagesDirectory,
+    std::string paramsFile,
+    std::string classifierCoefficientsFile,
+    std::string outputAnnotationsFile)
 {
-    std::string imagesDirectory = "../test-public";
     std::vector<int> imagesNumbers = getImagesSorted(imagesDirectory);
 
-    auto svm = cv::ml::SVM::load("pedestrian_model.yml");
+    auto svm = cv::ml::SVM::load(classifierCoefficientsFile);
 
-    cv::FileStorage params("../params.yml", cv::FileStorage::READ);
+    cv::FileStorage params(paramsFile, cv::FileStorage::READ);
     cv::HOGDescriptor hog;
     createHog(params, hog);
 
-    std::string outputFileName = "test-processed.idl";
     std::ofstream output;
-    output.open(outputFileName);
+    output.open(outputAnnotationsFile);
 
     std::vector<cv::Rect> results;
     for (auto b = imagesNumbers.begin(), e = imagesNumbers.end(); b != e; b++)
     {
         int imageNumber = *b;
-        std::string image = imagesDirectory + "/" + std::to_string(*b) + ".png";
+        std::string image = imagesDirectory + std::to_string(*b) + ".png";
 
         int detectResultCode = detectPedestrians(svm, hog, image, results);
         if (detectResultCode != 0)
@@ -231,7 +267,7 @@ int testMain()
 std::vector<int> getImagesSorted(std::string imagesDirectory)
 {
     std::vector<std::string> files;
-    cv::glob(imagesDirectory + "/*.png", files, false);
+    cv::glob(imagesDirectory + "*.png", files, false);
     std::vector<int> result;
     for (auto b = files.begin(), e = files.end(); b != e; b++)
     {
